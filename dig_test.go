@@ -28,6 +28,7 @@ import (
 	"math/rand"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -1923,6 +1924,321 @@ func TestGroups(t *testing.T) {
 			`dig_test.go:\d+`, // file:line
 			`every entry in a map value groups must have a name, group "val" is missing a name`)
 		assert.False(t, called, "shouldn't call invoked function when deps aren't available")
+	})
+
+	t.Run("map value groups with interface types", func(t *testing.T) {
+		c := digtest.New(t, dig.SetRand(rand.New(rand.NewSource(0))))
+
+		// Provide different implementations of io.Reader
+		c.RequireProvide(func() io.Reader {
+			return strings.NewReader("hello")
+		}, dig.Name("string_reader"), dig.Group("readers"))
+
+		c.RequireProvide(func() io.Reader {
+			return bytes.NewBufferString("world")
+		}, dig.Name("bytes_reader"), dig.Group("readers"))
+
+		type in struct {
+			dig.In
+
+			StringReader io.Reader                `name:"string_reader"`
+			BytesReader  io.Reader                `name:"bytes_reader"`
+			ReaderSlice  []io.Reader              `group:"readers"`
+			ReaderMap    map[string]io.Reader     `group:"readers"`
+		}
+
+		c.RequireInvoke(func(i in) {
+			// Test individual named access
+			assert.NotNil(t, i.StringReader)
+			assert.NotNil(t, i.BytesReader)
+
+			// Test slice access (traditional)
+			require.Len(t, i.ReaderSlice, 2)
+
+			// Test map access (new feature)
+			require.Len(t, i.ReaderMap, 2)
+			assert.NotNil(t, i.ReaderMap["string_reader"])
+			assert.NotNil(t, i.ReaderMap["bytes_reader"])
+
+			// Verify we can actually use the interface methods
+			buf := make([]byte, 5)
+			n, err := i.ReaderMap["string_reader"].Read(buf)
+			assert.NoError(t, err)
+			assert.Equal(t, 5, n)
+			assert.Equal(t, "hello", string(buf))
+		})
+	})
+
+	t.Run("map value groups with interface types using struct annotations", func(t *testing.T) {
+		c := digtest.New(t, dig.SetRand(rand.New(rand.NewSource(0))))
+
+		type out struct {
+			dig.Out
+
+			StringReader io.Reader `name:"str_reader" group:"readers"`
+			BytesReader  io.Reader `name:"buf_reader" group:"readers"`
+		}
+
+		c.RequireProvide(func() out {
+			return out{
+				StringReader: strings.NewReader("test1"),
+				BytesReader:  bytes.NewBufferString("test2"),
+			}
+		})
+
+		type in struct {
+			dig.In
+
+			ReaderMap map[string]io.Reader `group:"readers"`
+		}
+
+		c.RequireInvoke(func(i in) {
+			require.Len(t, i.ReaderMap, 2)
+
+			// Test that we got the right implementations
+			buf1 := make([]byte, 5)
+			buf2 := make([]byte, 5)
+
+			i.ReaderMap["str_reader"].Read(buf1)
+			i.ReaderMap["buf_reader"].Read(buf2)
+
+			assert.Equal(t, "test1", string(buf1))
+			assert.Equal(t, "test2", string(buf2))
+		})
+	})
+
+	t.Run("map value groups with pointer types", func(t *testing.T) {
+		c := digtest.New(t, dig.SetRand(rand.New(rand.NewSource(0))))
+
+		type MyStruct struct {
+			Value string
+		}
+
+		// Provide pointers using function options
+		c.RequireProvide(func() *MyStruct {
+			return &MyStruct{Value: "first"}
+		}, dig.Name("struct1"), dig.Group("structs"))
+
+		c.RequireProvide(func() *MyStruct {
+			return &MyStruct{Value: "second"}
+		}, dig.Name("struct2"), dig.Group("structs"))
+
+		type in struct {
+			dig.In
+
+			Struct1     *MyStruct            `name:"struct1"`
+			Struct2     *MyStruct            `name:"struct2"`
+			StructSlice []*MyStruct          `group:"structs"`
+			StructMap   map[string]*MyStruct `group:"structs"`
+		}
+
+		c.RequireInvoke(func(i in) {
+			// Test individual named access
+			require.NotNil(t, i.Struct1)
+			require.NotNil(t, i.Struct2)
+			assert.Equal(t, "first", i.Struct1.Value)
+			assert.Equal(t, "second", i.Struct2.Value)
+
+			// Test slice access
+			require.Len(t, i.StructSlice, 2)
+
+			// Test map access
+			require.Len(t, i.StructMap, 2)
+			require.NotNil(t, i.StructMap["struct1"])
+			require.NotNil(t, i.StructMap["struct2"])
+			assert.Equal(t, "first", i.StructMap["struct1"].Value)
+			assert.Equal(t, "second", i.StructMap["struct2"].Value)
+
+			// Verify pointers are the same instances
+			assert.Same(t, i.Struct1, i.StructMap["struct1"])
+			assert.Same(t, i.Struct2, i.StructMap["struct2"])
+		})
+	})
+
+	t.Run("map value groups with pointer types using struct annotations", func(t *testing.T) {
+		c := digtest.New(t, dig.SetRand(rand.New(rand.NewSource(0))))
+
+		type ConfigItem struct {
+			Name  string
+			Value int
+		}
+
+		type out struct {
+			dig.Out
+
+			Config1 *ConfigItem `name:"db_config" group:"configs"`
+			Config2 *ConfigItem `name:"cache_config" group:"configs"`
+			Config3 *ConfigItem `name:"auth_config" group:"configs"`
+		}
+
+		c.RequireProvide(func() out {
+			return out{
+				Config1: &ConfigItem{Name: "database", Value: 5432},
+				Config2: &ConfigItem{Name: "cache", Value: 6379},
+				Config3: &ConfigItem{Name: "auth", Value: 8080},
+			}
+		})
+
+		type in struct {
+			dig.In
+
+			ConfigSlice []*ConfigItem            `group:"configs"`
+			ConfigMap   map[string]*ConfigItem   `group:"configs"`
+		}
+
+		c.RequireInvoke(func(i in) {
+			// Test slice access
+			require.Len(t, i.ConfigSlice, 3)
+
+			// Test map access with meaningful keys
+			require.Len(t, i.ConfigMap, 3)
+
+			dbConfig := i.ConfigMap["db_config"]
+			require.NotNil(t, dbConfig)
+			assert.Equal(t, "database", dbConfig.Name)
+			assert.Equal(t, 5432, dbConfig.Value)
+
+			cacheConfig := i.ConfigMap["cache_config"]
+			require.NotNil(t, cacheConfig)
+			assert.Equal(t, "cache", cacheConfig.Name)
+			assert.Equal(t, 6379, cacheConfig.Value)
+
+			authConfig := i.ConfigMap["auth_config"]
+			require.NotNil(t, authConfig)
+			assert.Equal(t, "auth", authConfig.Name)
+			assert.Equal(t, 8080, authConfig.Value)
+		})
+	})
+
+	t.Run("map value groups with dig.As interface transformation", func(t *testing.T) {
+		c := digtest.New(t, dig.SetRand(rand.New(rand.NewSource(0))))
+
+		// Provide concrete types that get transformed to interfaces via dig.As
+		c.RequireProvide(func() *bytes.Buffer {
+			return bytes.NewBufferString("buffer1")
+		}, dig.Name("buf1"), dig.Group("readers"), dig.As(new(io.Reader)))
+
+		c.RequireProvide(func() *strings.Reader {
+			return strings.NewReader("reader1")
+		}, dig.Name("str1"), dig.Group("readers"), dig.As(new(io.Reader)))
+
+		type in struct {
+			dig.In
+
+			// Individual named access should work
+			Buf1 io.Reader `name:"buf1"`
+			Str1 io.Reader `name:"str1"`
+
+			// Traditional slice access should work
+			ReaderSlice []io.Reader `group:"readers"`
+
+			// NEW: Map access with dig.As should work
+			ReaderMap map[string]io.Reader `group:"readers"`
+		}
+
+		c.RequireInvoke(func(i in) {
+			// Test individual named access works
+			require.NotNil(t, i.Buf1)
+			require.NotNil(t, i.Str1)
+
+			// Test slice access works
+			require.Len(t, i.ReaderSlice, 2)
+
+			// Test map access works with dig.As
+			require.Len(t, i.ReaderMap, 2)
+
+			buf1Reader := i.ReaderMap["buf1"]
+			require.NotNil(t, buf1Reader)
+
+			str1Reader := i.ReaderMap["str1"]
+			require.NotNil(t, str1Reader)
+
+			// Verify we can actually use the interface methods
+			buf := make([]byte, 7)
+			n, err := buf1Reader.Read(buf)
+			assert.NoError(t, err)
+			assert.Equal(t, 7, n)
+			assert.Equal(t, "buffer1", string(buf))
+
+			buf2 := make([]byte, 7)
+			n2, err2 := str1Reader.Read(buf2)
+			assert.NoError(t, err2)
+			assert.Equal(t, 7, n2)
+			assert.Equal(t, "reader1", string(buf2))
+
+			// Verify same instances across access patterns
+			assert.Same(t, i.Buf1, i.ReaderMap["buf1"])
+			assert.Same(t, i.Str1, i.ReaderMap["str1"])
+		})
+	})
+
+	t.Run("map value groups with dig.As multiple interface transformation", func(t *testing.T) {
+		c := digtest.New(t, dig.SetRand(rand.New(rand.NewSource(0))))
+
+		// Provide a type that implements multiple interfaces
+		c.RequireProvide(func() *bytes.Buffer {
+			return bytes.NewBufferString("multi")
+		}, dig.Name("multi_buf"), dig.Group("readwriters"),
+			dig.As(new(io.Reader), new(io.Writer)))
+
+		c.RequireProvide(func() *bytes.Buffer {
+			return bytes.NewBufferString("another")
+		}, dig.Name("another_buf"), dig.Group("readwriters"),
+			dig.As(new(io.Reader), new(io.Writer)))
+
+		type in struct {
+			dig.In
+
+			// Access as readers
+			ReaderMap map[string]io.Reader `group:"readwriters"`
+
+			// Access as writers
+			WriterMap map[string]io.Writer `group:"readwriters"`
+
+			// Access as slice of readers
+			ReaderSlice []io.Reader `group:"readwriters"`
+		}
+
+		c.RequireInvoke(func(i in) {
+			// Test both interface maps work
+			require.Len(t, i.ReaderMap, 2)
+			require.Len(t, i.WriterMap, 2)
+			require.Len(t, i.ReaderSlice, 2)
+
+			// Test we can read from the reader interface
+			multiBufReader := i.ReaderMap["multi_buf"]
+			require.NotNil(t, multiBufReader)
+
+			readBuf := make([]byte, 5)
+			n, err := multiBufReader.Read(readBuf)
+			assert.NoError(t, err)
+			assert.Equal(t, 5, n)
+			assert.Equal(t, "multi", string(readBuf))
+
+			// Test we can write to the writer interface
+			multiBufWriter := i.WriterMap["multi_buf"]
+			require.NotNil(t, multiBufWriter)
+
+			n2, err2 := multiBufWriter.Write([]byte("_test"))
+			assert.NoError(t, err2)
+			assert.Equal(t, 5, n2)
+
+			// Verify both interfaces point to the same underlying object
+			// We can't use assert.Same here since they're different interface values
+			// but we can verify they affect the same buffer
+			anotherReader := i.ReaderMap["another_buf"]
+			anotherWriter := i.WriterMap["another_buf"]
+
+			// Write something
+			anotherWriter.Write([]byte("_added"))
+
+			// Read it back (should include both original + added)
+			fullBuf := make([]byte, 13)
+			n3, err3 := anotherReader.Read(fullBuf)
+			assert.NoError(t, err3)
+			assert.Equal(t, 13, n3)
+			assert.Equal(t, "another_added", string(fullBuf))
+		})
 	})
 
 }
