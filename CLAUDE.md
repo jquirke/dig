@@ -55,8 +55,10 @@ This is the Uber dig dependency injection framework. Recent work added map value
    - Risk: May return wrong types or lose map key information
    - Documentation: See `DECORATION_TEST_GAPS.md`
 
-2. **Soft Groups + Maps** (MEDIUM PRIORITY)
-   - Behavior verification needed for soft group consumption as maps
+2. **Soft Groups + Maps** ✅ COMPLETED
+   - Verified soft group consumption as maps works correctly
+   - Added comprehensive tests covering all soft map scenarios
+   - Tests cover: empty soft maps, executed vs non-executed providers, mixed consumption
 
 ## Code Patterns & Usage
 

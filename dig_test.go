@@ -1829,6 +1829,119 @@ func TestGroups(t *testing.T) {
 		})
 	})
 
+	t.Run("soft map value groups", func(t *testing.T) {
+		t.Run("soft map provider not called when only soft group consumed", func(t *testing.T) {
+			c := digtest.New(t)
+
+			type Result struct {
+				dig.Out
+				Value string `name:"val1" group:"handlers"`
+			}
+
+			// This provider should NOT be called because we're only consuming
+			// the soft group and there are no other dependencies forcing it to run
+			c.RequireProvide(func() (Result, int) {
+				require.FailNow(t, "this function should not be called for soft map groups")
+				return Result{Value: "should not see this"}, 42
+			})
+
+			type SoftMapConsumer struct {
+				dig.In
+				Handlers map[string]string `group:"handlers,soft"`
+			}
+
+			c.RequireInvoke(func(p SoftMapConsumer) {
+				assert.Empty(t, p.Handlers, "soft map group should be empty when no providers executed")
+			})
+		})
+
+		t.Run("soft map gets values from already-executed constructors", func(t *testing.T) {
+			c := digtest.New(t)
+
+			type HandlerResult struct {
+				dig.Out
+				Handler string `name:"handler1" group:"handlers"`
+				Service int    // This forces the constructor to run
+			}
+
+			// This provider will be called because we need the int service
+			c.RequireProvide(func() HandlerResult {
+				return HandlerResult{
+					Handler: "executed_handler",
+					Service: 100,
+				}
+			})
+
+			// Additional provider that won't be executed
+			type UnexecutedResult struct {
+				dig.Out
+				Handler string `name:"handler2" group:"handlers"`
+			}
+			c.RequireProvide(func() UnexecutedResult {
+				require.FailNow(t, "this should not be called")
+				return UnexecutedResult{Handler: "never_called"}
+			})
+
+			type ConsumerParams struct {
+				dig.In
+				Service         int                    // This triggers the first provider
+				SoftHandlerMap  map[string]string     `group:"handlers,soft"`
+				SoftHandlerSlice []string             `group:"handlers,soft"`
+			}
+
+			c.RequireInvoke(func(p ConsumerParams) {
+				assert.Equal(t, 100, p.Service)
+
+				// Soft map should only contain the handler from the executed constructor
+				assert.Len(t, p.SoftHandlerMap, 1)
+				assert.Equal(t, "executed_handler", p.SoftHandlerMap["handler1"])
+				assert.NotContains(t, p.SoftHandlerMap, "handler2")
+
+				// Verify slice consumption works the same way
+				assert.Len(t, p.SoftHandlerSlice, 1)
+				assert.Equal(t, "executed_handler", p.SoftHandlerSlice[0])
+			})
+		})
+
+		t.Run("soft map combined with regular map consumption", func(t *testing.T) {
+			c := digtest.New(t)
+
+			type ServiceResult struct {
+				dig.Out
+				Service string `name:"service1" group:"services"`
+				Config  int    // Forces execution
+			}
+
+			c.RequireProvide(func() ServiceResult {
+				return ServiceResult{
+					Service: "auth_service",
+					Config:  42,
+				}
+			})
+
+			type MultiConsumerParams struct {
+				dig.In
+				Config         int                    // Triggers provider
+				SoftServices   map[string]string     `group:"services,soft"`
+				RegularServices map[string]string    `group:"services"`
+			}
+
+			c.RequireInvoke(func(p MultiConsumerParams) {
+				assert.Equal(t, 42, p.Config)
+
+				// Both should have the same content since the provider was executed
+				assert.Len(t, p.SoftServices, 1)
+				assert.Equal(t, "auth_service", p.SoftServices["service1"])
+
+				assert.Len(t, p.RegularServices, 1)
+				assert.Equal(t, "auth_service", p.RegularServices["service1"])
+
+				// They should be equivalent
+				assert.Equal(t, p.SoftServices, p.RegularServices)
+			})
+		})
+	})
+
 	t.Run("map value group using dig.Name and dig.Group", func(t *testing.T) {
 		c := digtest.New(t, dig.SetRand(rand.New(rand.NewSource(0))))
 
