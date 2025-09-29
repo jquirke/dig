@@ -2305,7 +2305,8 @@ func TestGroups(t *testing.T) {
 			Nums []int `group:"numbers"`
 		}
 		c.RequireDecorate(func(p DecorateParams) DecorateResult {
-			t.Log("This slice decorator should not be called for named groups")
+			// Note: This decorator will be called but its results will be blocked
+			t.Logf("Slice decorator called (results will be blocked): %v", p.Nums)
 			result := make([]int, len(p.Nums))
 			for i, n := range p.Nums {
 				result[i] = n * 100
@@ -2410,7 +2411,8 @@ func TestGroups(t *testing.T) {
 				Nums []int `group:"numbers"`
 			}
 			c.RequireDecorate(func(p DecorateParams) DecorateResult {
-				t.Logf("Slice decorator called with: %v", p.Nums)
+				// Note: This decorator will be called but its results will be blocked
+				t.Logf("Slice decorator called (results will be blocked): %v", p.Nums)
 				return DecorateResult{Nums: p.Nums}
 			})
 
