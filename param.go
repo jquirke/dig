@@ -577,6 +577,33 @@ func (pt paramGroupedCollection) getDecoratedValues(c containerStore) (reflect.V
 	return _noValue, false
 }
 
+// groupHasNamedValues checks if this group contains any named values
+func (pt paramGroupedCollection) groupHasNamedValues(c containerStore) bool {
+	stores := c.storesToRoot()
+	for _, store := range stores {
+		kgvs := store.getValueGroup(pt.Group, pt.Type.Elem())
+		for _, kgv := range kgvs {
+			if kgv.key != "" {
+				return true // Found a named value
+			}
+		}
+	}
+	return false
+}
+
+// hasSliceDecorator checks if there's a slice-type decorator for this group
+func (pt paramGroupedCollection) hasSliceDecorator(c containerStore) bool {
+	stores := c.storesToRoot()
+	elementType := pt.Type.Elem()
+
+	for _, store := range stores {
+		if _, ok := store.getGroupDecorator(pt.Group, elementType); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // search the given container and its parents for matching group decorators
 // and call them to commit values. If any decorators return an error,
 // that error is returned immediately. If all decorators succeeds, nil is returned.
@@ -635,9 +662,25 @@ func (pt paramGroupedCollection) Build(c containerStore) (reflect.Value, error) 
 	}
 
 	// Check if we have decorated values
-	// qjeremy(how to handle this with maps?)
 	if decoratedItems, ok := pt.getDecoratedValues(c); ok {
+		// Validate: if we found decorated values but we're trying to build a slice
+		// and the group has named values, this is the problematic pattern
+		if !pt.isMap && pt.groupHasNamedValues(c) {
+			return _noValue, newErrInvalidInput(
+				fmt.Sprintf("cannot use slice decoration for value group %q: "+
+					"group contains named values, use map[string]T decorator instead",
+					pt.Group), nil)
+		}
 		return decoratedItems, nil
+	}
+
+	// Check if we have a slice decorator for a group with named values - this is always wrong
+	// Only block if there's actually a decorator AND named values
+	if !pt.isMap && pt.hasSliceDecorator(c) && pt.groupHasNamedValues(c) {
+		return _noValue, newErrInvalidInput(
+			fmt.Sprintf("cannot use slice decoration for value group %q: "+
+				"group contains named values, use map[string]T decorator instead",
+				pt.Group), nil)
 	}
 
 	// If we do not have any decorated values and the group isn't soft,
